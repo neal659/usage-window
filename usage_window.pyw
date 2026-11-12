@@ -1,11 +1,12 @@
 """
 Usage Window - a small Windows desktop app that shows your Claude usage.
 
-Network access: this app makes exactly ONE kind of request, a GET to
-https://api.anthropic.com/api/oauth/usage (see fetch_usage()). Nothing else
-is contacted. The OAuth token is read from %USERPROFILE%\\.claude\\.credentials.json
-and is only sent in the Authorization header to that host. It is never printed,
-logged, or shown on screen.
+Network access: this app makes only two kinds of request, and nothing else:
+  1. GET https://api.anthropic.com/api/oauth/usage   (the usage numbers)
+  2. POST https://platform.claude.com/v1/oauth/token  (renews the login when it expires)
+The OAuth token is read from %USERPROFILE%\\.claude\\.credentials.json. The access
+token is sent only to api.anthropic.com; the refresh token is sent only to the
+login server in request 2. Tokens are never printed, logged, or shown on screen.
 
 Only the 5-hour ("Current") and 7-day ("Weekly") windows are read. Account
 details and other usage buckets are ignored.
@@ -43,7 +44,9 @@ ICON_ICO = os.path.join(RESOURCE_DIR, "icon.ico")              # taskbar / title
 CREDENTIALS_FILE = os.path.join(
     os.environ.get("USERPROFILE", os.path.expanduser("~")), ".claude", ".credentials.json"
 )
-USAGE_URL = "https://api.anthropic.com/api/oauth/usage"        # the only host we contact
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"        # usage numbers
+TOKEN_URL = "https://platform.claude.com/v1/oauth/token"       # renews the login when it expires
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"       # Claude Code's public client id
 REFRESH_SECONDS = 60
 SETTINGS_VERSION = 3
 WINDOW_W, WINDOW_H = 270, 363  # full-size window: 14 px margins at the sides and bottom
@@ -151,9 +154,10 @@ DASH_LEGS = ".O..O....O..O.."    # stretched legs for the dash pose
 class UsageError(Exception):
     """An error with a message that is safe to show on screen (never contains the token)."""
 
-    def __init__(self, message, retry_after=None):
+    def __init__(self, message, retry_after=None, unauthorized=False):
         super().__init__(message)
         self.retry_after = retry_after      # seconds to wait before the next request, if known
+        self.unauthorized = unauthorized    # True when the server rejected the login token
 
 
 # ----------------------------------------------------------------------------
@@ -247,21 +251,64 @@ def save_settings(settings):
 # Usage data
 # ----------------------------------------------------------------------------
 
-def read_access_token():
-    """Read the OAuth access token from the Claude Code credentials file."""
+def load_credentials():
+    """Read the Claude Code credentials file (the login stays on this PC)."""
+    with open(CREDENTIALS_FILE, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_credentials(creds):
+    """Write the credentials back, so Claude Code sees the renewed login too."""
+    tmp = CREDENTIALS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(creds, f)
+    os.replace(tmp, CREDENTIALS_FILE)
+
+
+def refresh_access_token(creds):
+    """
+    Get a new access token from Claude's login server using the refresh token, and save it.
+    THE ONLY REQUEST TO platform.claude.com. It is the same renewal Claude Code does.
+    """
+    oauth = creds["claudeAiOauth"]
+    body = json.dumps({"grant_type": "refresh_token", "refresh_token": oauth["refreshToken"],
+                       "client_id": OAUTH_CLIENT_ID}).encode("utf-8")
+    request = urllib.request.Request(TOKEN_URL, data=body, headers={
+        "Content-Type": "application/json",
+        "User-Agent": "usage-window",
+    })
     try:
-        with open(CREDENTIALS_FILE, encoding="utf-8") as f:
-            creds = json.load(f)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError:
+        raise UsageError("Login expired. Open Claude Code.")     # the refresh token was rejected
+    except (urllib.error.URLError, OSError, ValueError):
+        raise UsageError("Could not reach the server.")
+    access = data.get("access_token")
+    if not isinstance(access, str) or not access:
+        raise UsageError("Login expired. Open Claude Code.")
+    oauth["accessToken"] = access
+    if isinstance(data.get("refresh_token"), str) and data["refresh_token"]:
+        oauth["refreshToken"] = data["refresh_token"]
+    if isinstance(data.get("expires_in"), (int, float)):
+        oauth["expiresAt"] = int((time.time() + data["expires_in"]) * 1000)
+    save_credentials(creds)
+    return access
+
+
+def read_access_token():
+    """Return a usable access token, renewing it first if it is about to expire."""
+    try:
+        creds = load_credentials()
     except (OSError, ValueError):
         raise UsageError("No Claude login. Sign in to Claude Code.")
     oauth = creds.get("claudeAiOauth") or {}
-    token = oauth.get("accessToken")
-    if not isinstance(token, str) or not token:
+    if not isinstance(oauth.get("accessToken"), str) or not oauth.get("refreshToken"):
         raise UsageError("No Claude login. Sign in to Claude Code.")
     expires_ms = oauth.get("expiresAt")
-    if isinstance(expires_ms, (int, float)) and expires_ms / 1000 < time.time():
-        raise UsageError("Login expired. Open Claude Code.")
-    return token
+    if isinstance(expires_ms, (int, float)) and expires_ms / 1000 - time.time() < 300:
+        return refresh_access_token(creds)          # less than 5 minutes left: renew now
+    return oauth["accessToken"]
 
 
 def parse_window(block):
@@ -283,10 +330,23 @@ def parse_window(block):
 
 def fetch_usage():
     """
-    THE ONLY NETWORK REQUEST IN THIS APP.
-    GET https://api.anthropic.com/api/oauth/usage with the OAuth bearer token.
+    Usage numbers: GET https://api.anthropic.com/api/oauth/usage.
+    If the server rejects the login, renew it once and try again.
     """
-    token = read_access_token()
+    try:
+        return request_usage(read_access_token())
+    except UsageError as e:
+        if not e.unauthorized:
+            raise
+    try:
+        creds = load_credentials()
+    except (OSError, ValueError):
+        raise UsageError("No Claude login. Sign in to Claude Code.")
+    return request_usage(refresh_access_token(creds))
+
+
+def request_usage(token):
+    """GET the usage numbers with the given access token."""
     request = urllib.request.Request(USAGE_URL, headers={
         "Authorization": "Bearer " + token,
         "anthropic-beta": "oauth-2025-04-20",
@@ -298,7 +358,7 @@ def fetch_usage():
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:          # must come before URLError (it is a subclass)
         if e.code in (401, 403):
-            raise UsageError("Login rejected. Sign in to Claude Code.")
+            raise UsageError("Login rejected. Sign in to Claude Code.", unauthorized=True)
         if e.code == 429:
             # Rate limited: wait as long as the server asks, at least 5 minutes by default.
             retry = e.headers.get("Retry-After") if e.headers else None

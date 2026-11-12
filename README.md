@@ -50,11 +50,12 @@ Settings are saved to `usage_settings.json` in this folder.
 
 ## Network requests
 
-This app makes exactly one kind of network request:
+This app makes two kinds of network request:
 
 | Method | URL | Purpose |
 |---|---|---|
 | GET | `https://api.anthropic.com/api/oauth/usage` | Read the 5-hour and 7-day utilisation and reset times |
+| POST | `https://platform.claude.com/v1/oauth/token` | Renew the login when it is about to expire (sends only the refresh token; saves the new token back to `.credentials.json`, as Claude Code does) |
 
 Headers sent: `Authorization: Bearer <token from .credentials.json>`, `anthropic-beta: oauth-2025-04-20`,
 `Accept`, and `User-Agent: usage-window`.

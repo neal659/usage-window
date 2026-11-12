@@ -8,6 +8,7 @@ the 5-hour **Current** window and the 7-day **Weekly** window.
 Requires Python 3 (tkinter is included in the standard Windows installer). Nothing else to install.
 
 - Double-click `usage_window.pyw`, or run `pythonw usage_window.pyw` from this folder.
+- Or build a single `.exe` with PyInstaller (`--onefile --noconsole`); it ends up in `dist/UsageWindow.exe`.
 - It also starts automatically when you sign in to Windows (shortcut in your Startup folder).
   Delete `Usage Window.lnk` from `shell:startup` to turn that off.
 
@@ -20,6 +21,8 @@ Files used by the app:
 - Reads the OAuth token from `%USERPROFILE%\.claude\.credentials.json`. The token is
   used only in the `Authorization` header and is never printed, logged or shown.
 - Refreshes every 60 seconds. Press F5, or click the creature, to fetch now.
+- Shows only the two usage windows. Fable usage and account details are not shown.
+- If the server says to slow down (HTTP 429), it waits at least 5 minutes before trying again.
 
 ## The creature
 
@@ -33,18 +36,27 @@ The orange pixel creature at the top of the window is animated (about 8 frames p
 - **Right-click:** opens the same dropdown menu as the three dots.
 
 Its body colour follows the current bar colour, and its eyes follow the background.
-- Shows only the two windows above. Fable usage and account details are not shown.
+
+### Keyboard (while the window has focus)
+
+- **Left / Right:** walk while held. It walks off one side and comes back in on the other.
+- **Double-tap Left or Right:** dash. Hold Up (or press it just before) for a diagonal dash.
+- **Up:** jump. Press Up again in the air for a double jump: a bigger boost, with a puff of dust from its feet.
+- **Down:** crouch while held.
+- **F5:** fetch the usage now.
+
+The scenic modes have an obstacle on the floor (a stump, coral, rock and so on). The creature cannot walk through it, but it can jump onto it or over it.
 
 ## Menu (three dots, top-right)
 
-A dropdown menu, no separate window:
+A dropdown menu drawn inside the window:
 
-- **Modes:** light, dark, crimson (red), abyss (blue), moss (green), ember (orange), grape
-- **Background colour...** and **Current / Weekly bar colour...** (Windows colour dialog)
-- **Refresh now**, **Reset to default**, **Exit**
+- **Modes:** light, dark, hell, underwater, jungle, fire, moon. The scenic modes have animated
+  scenery (falling leaves, fish, embers, blinking stars and a shooting star).
+- **Compact:** a small window with just the two percentages.
+- **Exit**
 
-Choosing a background sets the card, text and pill colours to suit it (dark or light).
-Each progress bar keeps its own fixed colour, which does not change with the percentage.
+At each start the window picks one of hell, underwater, jungle, fire or moon at random.
 
 Settings are saved to `usage_settings.json` in this folder.
 

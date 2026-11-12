@@ -129,6 +129,8 @@ EYES_SHUT = ("..OOOOOOOOOOO..", "..OEEOOOOOEEO..")   # blink: eyes become a clos
 LEGS_A = "...O..O.O..O..."
 LEGS_B = "..O..O...O..O.."
 JUMP_PX = (22, 26, 10, 0)        # height of the jump in screen pixels, one value per frame (0.5 s, higher and quicker)
+DOUBLE_JUMP_RISE = (16, 30)      # double jump: pixels gained over the height he jumped from, per rising frame
+DOUBLE_JUMP_FALL = (6, 12, 18, 24)  # double jump: pixels lost per falling frame (speeds up like gravity)
 WALK_PX = 3                      # walking speed in pixels per frame
 WALK_HALF = 12                   # frames to walk out (and the same to walk back): 36 px each way
 CREATURE_STEP = 4                   # pixels the creature moves per arrow-key press
@@ -407,7 +409,10 @@ class UsageApp:
         self.menu_hits = []         # clickable dropdown rows: (x1, y1, x2, y2, command)
         self._auto_id = None
         self.anim_frame = 0         # counts animation frames (blink, walk and bob timing)
-        self.jump_step = None       # index into JUMP_PX while jumping, else None
+        self.jump_step = None       # index into self.jump_px while jumping, else None
+        self.jump_px = JUMP_PX      # the jump arc in use: JUMP_PX, or a double-jump arc built in the air
+        self.jump_lift = 0          # jump height drawn in the last frame (a double jump starts from it)
+        self.feet_y = CREATURE_Y + 10 * CREATURE_PX   # bottom of his legs in the last frame
         self.hovering = False       # mouse is over the creature
         self.drag = None            # set while the left button is held on the creature
         self.creature_x = CREATURE_X   # left edge of the creature (it walks sideways)
@@ -733,7 +738,7 @@ class UsageApp:
             rows[8], rows[9] = legs
         if self.facing < 0:                              # mirror the sprite to face left
             rows = [row[::-1] for row in rows]
-        lift = JUMP_PX[self.jump_step] if jumping else 0   # jump height in pixels
+        lift = self.jump_px[self.jump_step] if jumping else 0   # jump height in pixels
         return rows, lift
 
     def draw_scene(self, w, floor_y):
@@ -974,6 +979,8 @@ class UsageApp:
         # Stand on the rock top when his legs are over it (a jump can land him there)
         height = max(lift + self.dash_lift, self.rock_ground(x0))
         y0 = max(0, self.creature_y - height)
+        self.jump_lift = lift
+        self.feet_y = y0 + 10 * CREATURE_PX        # bottom of his legs, where jump dust starts
         # Keep the click/hover area on the creature's current position
         self.hits = [h for h in self.hits if h[4] != "creature"]
         self.hits.append((x0, 0, x0 + 15 * CREATURE_PX, CREATURE_Y + 10 * CREATURE_PX, "creature"))
@@ -1156,7 +1163,7 @@ class UsageApp:
         if ob is None or new_x == old_x:
             return new_x
         rock_x1, rock_x2, rock_h = ob
-        lift = (JUMP_PX[self.jump_step] if self.jump_step is not None else 0) + self.dash_lift
+        lift = (self.jump_px[self.jump_step] if self.jump_step is not None else 0) + self.dash_lift
         if max(lift, self.rock_ground(old_x)) >= rock_h:
             return new_x                     # high enough in the air, or already standing on the rock
         if new_x + HIT_RIGHT <= rock_x1 or new_x + HIT_LEFT >= rock_x2:
@@ -1187,9 +1194,10 @@ class UsageApp:
                 self.jump_step = 0
                 self.air_jumps = 0
             elif new_press and self.air_jumps < 1:  # in the air: one double jump
+                self.jump_px = self.double_jump_arc(self.jump_lift)
                 self.jump_step = 0
                 self.air_jumps = 1
-                self.spawn_dust(self.creature_x + 30)   # double-jump puff at his feet
+                self.spawn_air_puff(self.creature_x + 30, self.feet_y)   # puff under his feet, mid-air
             return
         dx = {"Left": -1, "Right": 1}.get(key, 0)
         if dx == 0:
@@ -1242,6 +1250,7 @@ class UsageApp:
         self.dash_diag = diagonal
         if diagonal:
             self.jump_step = None           # the diagonal arc replaces the plain jump
+            self.jump_px = JUMP_PX
         self.facing = dx
         self.steer_held = False             # the dash replaces walking
         self.steer_tail = 0
@@ -1281,6 +1290,28 @@ class UsageApp:
             self.fx.append({"kind": "dot", "x": cx + random.uniform(-20, 20), "y": floor - 2,
                             "vx": random.uniform(-1.5, 1.5), "vy": random.uniform(-2.0, -0.5),
                             "life": FX_TICKS, "color": "text", "dx": 1})
+
+    def double_jump_arc(self, start):
+        """Heights for a double jump from `start` px: a big boost up, then a gravity-like fall to 0."""
+        peak = CREATURE_Y                    # the top of the window: he cannot be drawn higher
+        arc = [min(peak, start + rise) for rise in DOUBLE_JUMP_RISE]
+        h = arc[-1]
+        for drop in DOUBLE_JUMP_FALL:
+            h = max(0, h - drop)
+            arc.append(h)
+            if h == 0:
+                break
+        if arc[-1] != 0:
+            arc.append(0)                    # always end on the floor
+        return tuple(arc)
+
+    def spawn_air_puff(self, cx, feet_y):
+        """A puff pushed down from his feet for the double jump, in mid-air instead of on the floor."""
+        for _ in range(8):
+            # Start a bit above the feet and drift only slightly, so the puff stays up where he jumped
+            self.fx.append({"kind": "dot", "x": cx + random.uniform(-14, 14), "y": feet_y - 12 + random.uniform(-3, 3),
+                            "vx": random.uniform(-2.0, 2.0), "vy": random.uniform(-1.0, 0.0),
+                            "life": FX_TICKS, "color": random.choice(("bar_current", "text")), "dx": 1})
 
     def step_fx(self):
         """Move the effects; drop each one once it has faded (about 0.5 s)."""
@@ -1330,8 +1361,9 @@ class UsageApp:
         self.anim_frame += 1
         if self.jump_step is not None:
             self.jump_step += 1
-            if self.jump_step >= len(JUMP_PX):
+            if self.jump_step >= len(self.jump_px):
                 self.jump_step = None
+                self.jump_px = JUMP_PX
                 self.air_jumps = 0
                 self.spawn_dust(self.creature_x + 30)   # landing puff
         elif self.dash_left == 0:

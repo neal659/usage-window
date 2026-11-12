@@ -1,0 +1,8 @@
+# build output and packaging
+dist/
+build/
+*.spec
+*.zip
+__pycache__/
+# local settings (per computer)
+usage_settings.json

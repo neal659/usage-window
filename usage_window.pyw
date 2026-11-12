@@ -253,14 +253,14 @@ def read_access_token():
         with open(CREDENTIALS_FILE, encoding="utf-8") as f:
             creds = json.load(f)
     except (OSError, ValueError):
-        raise UsageError("No Claude login found. Sign in with Claude Code first.")
+        raise UsageError("No Claude login. Sign in to Claude Code.")
     oauth = creds.get("claudeAiOauth") or {}
     token = oauth.get("accessToken")
     if not isinstance(token, str) or not token:
-        raise UsageError("No Claude login found. Sign in with Claude Code first.")
+        raise UsageError("No Claude login. Sign in to Claude Code.")
     expires_ms = oauth.get("expiresAt")
     if isinstance(expires_ms, (int, float)) and expires_ms / 1000 < time.time():
-        raise UsageError("Login expired. Open Claude Code once to refresh it.")
+        raise UsageError("Login expired. Open Claude Code.")
     return token
 
 
@@ -298,7 +298,7 @@ def fetch_usage():
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:          # must come before URLError (it is a subclass)
         if e.code in (401, 403):
-            raise UsageError("Login rejected (HTTP %d). Open Claude Code to sign in again." % e.code)
+            raise UsageError("Login rejected. Sign in to Claude Code.")
         if e.code == 429:
             # Rate limited: wait as long as the server asks, at least 5 minutes by default.
             retry = e.headers.get("Retry-After") if e.headers else None
@@ -514,7 +514,7 @@ class UsageApp:
             self.draw_card(pad, y1, w - pad, y1 + card_h, key, label, self.c(bar_key))
 
         # Bottom line: shows only error messages (empty when everything is fine)
-        c.create_text(pad, h - pad, anchor="sw", text=self.status_text(),
+        c.create_text(pad, h - 3, anchor="sw", text=self.status_text(),
                       font=("Consolas", 7), fill=mix_colors(text, bg, 0.5),
                       width=w - 2 * pad, tags=("status",))
         if self._menu_open:                    # the dropdown sits on top of everything
